@@ -11,9 +11,9 @@ from langchain.vectorstores import FAISS
 from langchain.chains.question_answering import load_qa_chain
 from langchain.llms import OpenAI
 from langchain.docstore.document import Document
+from langchain.document_loaders import PyPDFLoader
+from langchain.chains import RetrievalQA
 from dotenv import load_dotenv
-
-import pickle
 
 load_dotenv()
 
@@ -28,15 +28,15 @@ url: str = os.environ.get('SUPABASE_URL')
 key: str = os.environ.get('SUPABASE_KEY')
 supabase: Client = create_client(url, key)
 
-chain = load_qa_chain(OpenAI(temperature=0), chain_type="stuff")
-docsearch = FAISS.from_documents([Document(page_content="This is ZK-Rollup Crypto Info Data.\n\n")], OpenAIEmbeddings())
+chain = load_qa_chain(llm=OpenAI(temperature=0), chain_type="stuff")
+db = FAISS.from_documents([Document(page_content="This is ZK-Rollup Crypto Info Data.\n\n")], OpenAIEmbeddings())
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 @app.route('/api/upload', methods=['POST'])
 def upload():
-    global reader, raw_text, texts, embeddings, docsearch
+    global texts, db
     if 'file' not in request.files:
         return {"state": "error", "message": "No file part"}
     file = request.files['file']
@@ -46,29 +46,24 @@ def upload():
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
         print(filename)
-        reader = PdfReader(file, filename)
-        raw_text = ''
-        for i, page in enumerate(reader.pages):
-            text = page.extract_text()
-            if text:
-                raw_text += text
-        text_splitter = CharacterTextSplitter(separator="\n", chunk_size=1000, chunk_overlap=200, length_function=len)
-        texts = text_splitter.split_text(raw_text)
+        file.save(os.path.join(app.config['UPLOAD_FOLDER'], 'tmp.pdf'))
+        loader = PyPDFLoader(os.path.join(app.config['UPLOAD_FOLDER'], 'tmp.pdf'))
+        documents = loader.load()
+        text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
+        texts = text_splitter.split_documents(documents)
 
         if os.path.exists("./store/" + uuid + "/index.faiss"):
-            docsearch = FAISS.load_local("./store/" + uuid, OpenAIEmbeddings())
-            for text in texts:
-                docsearch.add_documents([Document(page_content=text)])
+            db = FAISS.load_local("./store/" + uuid, OpenAIEmbeddings())
         else:
-            docsearch = FAISS.from_texts(texts, OpenAIEmbeddings())
-        docsearch.save_local("./store/" + uuid)
+            db = FAISS.from_documents(texts, OpenAIEmbeddings())
+        db.save_local("./store/" + uuid)
 
         # Summarize PDF
-        query = "Please summarize the PDF document in detail. Your summary should cover the main points and arguments presented in the document, as well as any supporting evidence or examples. Please provide a clear and concise summary that accurately represents the content of the document. Your summary should be in with 1, 2, 3, ... detailed numbers."
-        docs = docsearch.similarity_search(query)
-        completion = chain.run(input_documents=docs, question=query)
-        print(completion)
-        return {"state": "success", "answer": completion}
+        query = "Please summarize the PDF document in detail. Your summary should cover the main points and arguments presented in the document, as well as any supporting evidence or examples. Please provide a clear and concise summary that accurately represents the content of the document. Please split summaries with segments. each segment should be numbered in with 1, 2, 3, ... ."
+        retriever = db.as_retriever(search_type="similarity", search_kwargs={"k":2})
+        qa = RetrievalQA.from_chain_type(llm=OpenAI(), chain_type="stuff", retriever=retriever, return_source_documents=False)
+        completion = qa({'query': query})
+        return {"state": "success", "answer": completion.get('result')}
     
     return {"state": "error", "message": "Invalid file format"}
 
@@ -78,11 +73,14 @@ def chat():
     prompt = query['prompt']
     uuid = query['uuid']
     if os.path.exists("./store/" + uuid + "/index.faiss"):
-        docsearch = FAISS.load_local("./store/" + uuid, OpenAIEmbeddings())
-    docs = docsearch.similarity_search(prompt)
-    completion = chain.run(input_documents=docs, question=prompt)
-    print(completion)
-    return {"answer": completion }
+        db = FAISS.load_local("./store/" + uuid, OpenAIEmbeddings())
+    retriever = db.as_retriever(search_type="similarity", search_kwargs={"k":2})
+    qa = RetrievalQA.from_chain_type(llm=OpenAI(), chain_type="stuff", retriever=retriever, return_source_documents=True)
+    completion = qa({'query': prompt})
+    metadata = []
+    for source_document in completion['source_documents']:
+        metadata.append({'page': source_document.metadata['page'], 'ref': source_document.page_content[:200]})
+    return {"state": "success", "answer": completion.get('result'), "metadata": metadata }
 
 if __name__ == '__main__':
     app.run(debug=True)
