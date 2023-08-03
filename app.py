@@ -4,7 +4,6 @@ from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from supabase import create_client, Client
 
-from PyPDF2 import PdfReader
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.vectorstores import FAISS
@@ -14,7 +13,6 @@ from langchain.docstore.document import Document
 from langchain.document_loaders import PyPDFLoader
 from langchain.chains import RetrievalQA
 from dotenv import load_dotenv
-import pickle
 
 load_dotenv()
 

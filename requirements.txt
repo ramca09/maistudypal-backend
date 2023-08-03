@@ -3,9 +3,9 @@ flask
 flask_cors
 faiss-cpu
 openai
-PyPDF2
 python-dotenv
 pandas
 supabase
 gunicorn
 tiktoken
+pypdf
