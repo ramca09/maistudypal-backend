@@ -14,6 +14,7 @@ from langchain.docstore.document import Document
 from langchain.document_loaders import PyPDFLoader
 from langchain.chains import RetrievalQA
 from dotenv import load_dotenv
+import pickle
 
 load_dotenv()
 
@@ -34,6 +35,11 @@ db = FAISS.from_documents([Document(page_content="This is ZK-Rollup Crypto Info 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def isExist(folderpath, filename):
+    res = supabase.storage.from_('traindata').list(folderpath)
+    filtered = res(filter(lambda v: v.name == filename))
+    return len(filtered) > 0
+
 @app.route('/api/upload', methods=['POST'])
 def upload():
     global texts, db
@@ -41,21 +47,29 @@ def upload():
         return {"state": "error", "message": "No file part"}
     file = request.files['file']
     uuid = request.form['uuid']
+    fileUrl = request.form['path']
+    print(fileUrl)
     if file.filename == '':
         return {"state": "error", "message": "No selected file"}
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
         print(filename)
-        file.save(os.path.join(app.config['UPLOAD_FOLDER'], 'tmp.pdf'))
-        loader = PyPDFLoader(os.path.join(app.config['UPLOAD_FOLDER'], 'tmp.pdf'))
+        loader = PyPDFLoader(fileUrl)
         documents = loader.load()
         text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
         texts = text_splitter.split_documents(documents)
 
+        # if isExist(uuid, "index.faiss"):
+            #  = supabase.storage.from_('traindata').download(uuid+'/index.faiss')
+            # FAISS.
         if os.path.exists("./store/" + uuid + "/index.faiss"):
             db = FAISS.load_local("./store/" + uuid, OpenAIEmbeddings())
         else:
             db = FAISS.from_documents(texts, OpenAIEmbeddings())
+
+        # save data to supabase
+        # with open(db, 'rb+') as f:
+        #     res = supabase.storage.from_('traindata').upload('/uuid', f)
         db.save_local("./store/" + uuid)
 
         # Summarize PDF
